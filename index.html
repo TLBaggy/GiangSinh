@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Món quà tặng Nhi nhó</title>
+    <style>
+        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Arial', sans-serif; }
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
+
+        /* --- UI LAYER (Không gian 3D) --- */
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            perspective: 1000px; /* Tạo chiều sâu cho mắt nhìn */
+        }
+
+        /* --- CONTAINER: Chịu trách nhiệm VỊ TRÍ bay vòng tròn --- */
+        .gift-container {
+            position: absolute;
+            top: 50%; left: 50%; /* Đặt mốc ở giữa màn hình */
+            width: 0; height: 0; /* Không có kích thước để căn giữa dễ hơn */
+            pointer-events: auto;
+            transform-style: preserve-3d;
+            cursor: pointer;
+        }
+
+        /* --- BOX: Chịu trách nhiệm HÌNH DÁNG 3D và TỰ XOAY --- */
+        .gift-box {
+            position: absolute;
+            top: -30px; left: -30px; /* Căn giữa hộp 60px vào tâm của container */
+            width: 30px; height: 30px;
+            transform-style: preserve-3d;
+            animation: spinGift 5s infinite linear; /* Hộp tự xoay */
+        }
+
+        /* --- CÁC MẶT CỦA HỘP QUÀ --- */
+        .face {
+            position: absolute;
+            width: 30px; height: 30px;
+            background-color: #cc0000; /* Đỏ */
+            border: 1px solid #ff3333;
+            box-shadow: inset 0 0 15px rgba(0,0,0,0.5);
+            opacity: 0.95;
+        }
+
+        /* RUY BĂNG VÀNG */
+        .face::before {
+            content: ''; position: absolute;
+            width: 12px; height: 100%;
+            background-color: #FFD700;
+            left: 50%; transform: translateX(-50%);
+        }
+        .face::after {
+            content: ''; position: absolute;
+            width: 100%; height: 12px;
+            background-color: #FFD700;
+            top: 50%; transform: translateY(-50%);
+        }
+        /* Bỏ ruy băng ngang ở mặt trên/dưới cho đỡ rối */
+        .top::after, .bottom::after { display: none; }
+        .top::before, .bottom::before { width: 100%; height: 12px; top: 50%; transform: translateY(-50%) rotate(90deg); }
+
+        /* GHÉP 6 MẶT THÀNH HÌNH LẬP PHƯƠNG */
+        .front  { transform: translateZ(30px); }
+        .back   { transform: rotateY(180deg) translateZ(30px); }
+        .right  { transform: rotateY(90deg) translateZ(30px); }
+        .left   { transform: rotateY(-90deg) translateZ(30px); }
+        .top    { transform: rotateX(90deg) translateZ(30px); background-color: #e60000; }
+        .bottom { transform: rotateX(-90deg) translateZ(30px); }
+
+        @keyframes spinGift {
+            0% { transform: rotateX(0deg) rotateY(0deg); }
+            100% { transform: rotateX(360deg) rotateY(360deg); }
+        }
+
+        /* --- LIGHTBOX (Xem ảnh) --- */
+        #lightbox {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            z-index: 20;
+            display: none; justify-content: center; align-items: center;
+            pointer-events: auto;
+        }
+        #lightbox img {
+            max-width: 90%; max-height: 90%;
+            border: 5px solid #fff;
+            border-radius: 10px;
+            box-shadow: 0 0 50px rgba(255,255,255,0.3);
+            transform: scale(0);
+            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* --- TEXT MERRY CHRISTMAS --- */
+        #final-text {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%; text-align: center;
+            opacity: 0; transition: opacity 2s;
+            z-index: 5; pointer-events: none;
+        }
+        #final-text h1 {
+            font-family: 'Courier New', monospace;
+            font-size: 3rem; color: #00ff00;
+            text-shadow: 0 0 20px #00ff00, 0 0 40px #ff0000;
+            margin: 0; white-space: nowrap;
+        }
+        @media (min-width: 768px) { #final-text h1 { font-size: 5rem; } }
+
+    </style>
+</head>
+<body>
+
+    <canvas id="canvas"></canvas>
+    <div id="ui-layer"></div>
+
+    <div id="lightbox" onclick="closeLightbox()">
+        <img id="lightbox-img" src="" alt="">
+    </div>
+
+    <div id="final-text">
+        <h1>MERRY CHRISTMAS 🎄</h1>
+    </div>
+
+    <script>
+        // --- 1. THAY ẢNH CỦA BẠN VÀO ĐÂY (Đủ 6 ảnh) ---
+        const myImages = [
+            "Nhi1.jpg",
+            "Nhi2.jpg",
+            "Nhi3.jpg",
+            "Nhi4.jpg",
+            "Nhi5.jpg",
+            "Nhi6.jpg"
+        ];
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const uiLayer = document.getElementById('ui-layer');
+
+        let width, height;
+        let particles = [];
+        let giftContainers = []; // Mảng chứa các hộp quà
+        let state = 0; // 0: Cây thông, 1: Hộp quà bay, 2: Kết thúc
+        let angleY = 0;
+        let openedGiftsCount = 0;
+
+        const colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#00FFFF', '#FF00FF', '#FFFFFF'];
+
+        // --- HỆ THỐNG HẠT (Cây thông & Nền) ---
+        class Particle {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                this.x = 0; this.y = 0; this.z = 0;
+                this.tx = 0; this.ty = 0; this.tz = 0;
+                this.vx = 0; this.vy = 0; this.vz = 0;
+                this.color = colors[Math.floor(Math.random() * colors.length)];
+                this.size = Math.random() * 3 + 1;
+                this.setTreeTarget();
+
+                // Khởi tạo vị trí ngẫu nhiên
+                this.x = (Math.random() - 0.5) * window.innerWidth;
+                this.y = (Math.random() - 0.5) * window.innerHeight;
+                this.z = (Math.random() - 0.5) * 1000;
+            }
+
+            setTreeTarget() {
+                // TẠO DÁNG CÂY THÔNG
+                this.ty = Math.random() * 900 - 450;
+                let coneRadius = (this.ty + 450) * 0.55;
+                const a = Math.random() * Math.PI * 2;
+                const r = Math.random() * coneRadius;
+                this.tx = Math.cos(a) * r;
+                this.tz = Math.sin(a) * r;
+            }
+
+            explode() {
+                // Hiệu ứng nổ tung tóe
+                this.vx = (Math.random() - 0.5) * 8;
+                this.vy = (Math.random() - 0.5) * 8;
+                this.vz = (Math.random() - 0.5) * 8;
+            }
+
+            update() {
+                if (state === 0) {
+                    // Bay về vị trí cây
+                    this.x += (this.tx - this.x) * 0.05;
+                    this.y += (this.ty - this.y) * 0.05;
+                    this.z += (this.tz - this.z) * 0.05;
+                } else {
+                    // Bay tự do
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    this.z += this.vz;
+                    // Đập tường quay lại
+                    if(this.x > 2000 || this.x < -2000) this.vx *= -1;
+                    if(this.y > 2000 || this.y < -2000) this.vy *= -1;
+                }
+            }
+
+            draw(cosY, sinY) {
+                const fov = 400;
+                const rx = this.x * cosY - this.z * sinY;
+                const rz = this.z * cosY + this.x * sinY;
+                const scale = fov / (fov + rz + 800);
+
+                if (scale > 0) {
+                    const x2d = rx * scale + width / 2;
+                    const y2d = this.y * scale + height / 2;
+                    ctx.beginPath();
+                    ctx.arc(x2d, y2d, this.size * scale, 0, Math.PI * 2);
+                    ctx.fillStyle = this.color;
+                    ctx.fill();
+                }
+            }
+        }
+
+        function drawStar(cosY, sinY) {
+            if (state !== 0) return;
+            const fov = 400;
+            const starY = -480;
+            const rx = 0; const rz = 0; // Tâm
+
+            // Xoay theo trục Y cùng cây
+            // Ngôi sao nằm trên trục Y nên x, z = 0, khi xoay vẫn là 0
+            // Chỉ cần tính scale
+            const scale = fov / (fov + rz + 800);
+            const x2d = width / 2; // Luôn ở giữa
+            const y2d = starY * scale + height / 2;
+
+            if (scale > 0) {
+                ctx.save();
+                ctx.translate(x2d, y2d);
+                ctx.beginPath();
+                const spikes = 5;
+                const outerRadius = 40 * scale;
+                const innerRadius = 20 * scale;
+                for (let i = 0; i < spikes * 2; i++) {
+                    const r = (i % 2 === 0) ? outerRadius : innerRadius;
+                    const angle = (Math.PI / spikes) * i - Math.PI / 2;
+                    const sx = Math.cos(angle) * r;
+                    const sy = Math.sin(angle) * r;
+                    if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+                }
+                ctx.closePath();
+                ctx.fillStyle = "#FFD700";
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = "#FFD700";
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // --- XỬ LÝ HỘP QUÀ 3D ---
+        function createGifts() {
+            uiLayer.innerHTML = '';
+            giftContainers = [];
+
+            // Lấy tối đa 6 ảnh
+            const limit = Math.min(myImages.length, 6);
+
+            for (let i = 0; i < limit; i++) {
+                // 1. Tạo Container (để di chuyển vị trí)
+                const container = document.createElement('div');
+                container.className = 'gift-container';
+
+                // 2. Tạo Box (để xoay 3D)
+                const box = document.createElement('div');
+                box.className = 'gift-box';
+
+                // 3. Tạo 6 mặt
+                const faces = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+                faces.forEach(faceName => {
+                    const face = document.createElement('div');
+                    face.className = `face ${faceName}`;
+                    box.appendChild(face);
+                });
+
+                // Gắn Box vào Container
+                container.appendChild(box);
+
+                // Lưu góc để tính vị trí vòng tròn
+                // Chia đều 360 độ (2*PI) cho số lượng hộp
+                container.dataset.angleOffset = (i / limit) * Math.PI * 2;
+
+                // Click mở quà
+                container.onclick = () => {
+                    container.style.display = 'none'; // Ẩn quà đã mở
+                    openLightbox(myImages[i]);
+                };
+
+                uiLayer.appendChild(container);
+                giftContainers.push(container);
+            }
+        }
+
+        function updateGifts(angleY) {
+            if (state !== 1) return;
+
+            const radius = 280; // Độ rộng vòng xoay
+            const fov = 400;
+
+            giftContainers.forEach(container => {
+                if (container.style.display === 'none') return;
+
+                // Tính góc hiện tại = Góc riêng + Góc quay chung
+                const currentAngle = parseFloat(container.dataset.angleOffset) + angleY;
+
+                // Tính tọa độ 3D
+                const x = Math.cos(currentAngle) * radius;
+                const z = Math.sin(currentAngle) * radius;
+
+                // Phép chiếu 3D (Projection)
+                const scale = fov / (fov + z + 0); // +0 vì container gốc ở z=0
+
+                // Tính tọa độ màn hình (relative to center)
+                const x2d = x * scale;
+                const y2d = 0; // Hộp quà bay ngang tầm mắt (Y=0)
+
+                // Áp dụng Transform
+                // Dùng translate3d để mượt hơn
+                container.style.transform = `translate3d(${x2d}px, ${y2d}px, 0) scale(${scale})`;
+
+                // Sắp xếp Z-index: Hộp nào ở gần (scale lớn) thì đè lên hộp ở xa
+                container.style.zIndex = Math.floor(scale * 100);
+            });
+        }
+
+        // --- XỬ LÝ ẢNH & LOGIC CHUNG ---
+        function openLightbox(src) {
+            const lightbox = document.getElementById('lightbox');
+            const img = document.getElementById('lightbox-img');
+            img.src = src;
+            lightbox.style.display = 'flex';
+            setTimeout(() => { img.style.transform = 'scale(1)'; }, 50);
+        }
+
+        function closeLightbox() {
+            const lightbox = document.getElementById('lightbox');
+            const img = document.getElementById('lightbox-img');
+            img.style.transform = 'scale(0)';
+
+            setTimeout(() => {
+                lightbox.style.display = 'none';
+                openedGiftsCount++;
+                // Kiểm tra xem đã mở hết quà chưa
+                if (openedGiftsCount >= giftContainers.length) {
+                    state = 2; // Chuyển sang kết thúc
+                    document.getElementById('final-text').style.opacity = 1;
+                }
+            }, 300);
+        }
+
+        function init() {
+            resize();
+            for (let i = 0; i < 2000; i++) particles.push(new Particle());
+            animate();
+        }
+
+        // Click để bắt đầu
+        canvas.addEventListener('click', () => {
+            if (state === 0) {
+                state = 1;
+                particles.forEach(p => p.explode());
+                createGifts();
+            }
+        });
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+
+            // Góc xoay
+            angleY += 0.005;
+            const cosY = Math.cos(angleY);
+            const sinY = Math.sin(angleY);
+
+            // Vẽ hạt
+            particles.forEach(p => {
+                p.update();
+                p.draw(cosY, sinY);
+            });
+
+            // Vẽ sao (chỉ khi chưa nổ)
+            drawStar(cosY, sinY);
+
+            // Cập nhật vị trí quà
+            updateGifts(angleY);
+
+            requestAnimationFrame(animate);
+        }
+
+        window.addEventListener('resize', resize);
+        init();
+
+    </script>
+</body>
+</html>
